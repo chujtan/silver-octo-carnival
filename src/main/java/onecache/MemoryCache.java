@@ -69,9 +69,12 @@ public class MemoryCache<T> implements Cache<T> {
 
         // Mark as most recently read.
         this.mostRecentlyReadKeys.remove(key);
-        this.mostRecentlyReadKeys.addLast(key);
+//        this.mostRecentlyReadKeys.addLast(key);
+        this.mostRecentlyReadKeys.addFirst(key);
 
-        return new CacheResult<T>(false, item.value);
+        System.out.println("Reading " + key + " mru="+mostRecentlyReadKeys);
+
+        return new CacheResult<T>(true, item.value);
     }
 
     /**
@@ -96,6 +99,9 @@ public class MemoryCache<T> implements Cache<T> {
      */
     @Override
     public synchronized void set(String key, T value, long expireAfterMS) {
+
+        System.out.println("Adding " + key + ":" + value + " MRU=" + mostRecentlyReadKeys);
+
         // Add item.
         // TODO: Store expiry too, and clear when expired.
         Item item = new Item(key, value);
