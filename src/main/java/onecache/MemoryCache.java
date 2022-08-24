@@ -1,6 +1,7 @@
 package onecache;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.Map;
 
@@ -28,9 +29,15 @@ public class MemoryCache<T> implements Cache<T> {
         final String key;
         final T value;
 
-        private Item(String key, T value) {
+        final long expiryTimestamp;
+
+        final Runnable schedulerCancel;
+
+        private Item(String key, T value, long expiryTimestamp, Runnable schedulerCancel) {
             this.key = key;
             this.value = value;
+            this.expiryTimestamp = expiryTimestamp;
+            this.schedulerCancel = schedulerCancel;
         }
     }
 
@@ -54,7 +61,7 @@ public class MemoryCache<T> implements Cache<T> {
      *
      * @param key cache key
      * @return a {@link CacheResult} containing whether the key was found,
-     *         and its value
+     * and its value
      */
     @Override
     public synchronized CacheResult<T> get(String key) {
@@ -65,16 +72,26 @@ public class MemoryCache<T> implements Cache<T> {
         }
         Item item = this.itemsByKey.get(key);
 
-        // TODO: Check for expiry, and clear if expired.
+        if (isItemExpired(item)) {
+            clear(key);
+            if (item.schedulerCancel != null) {
+                item.schedulerCancel.run();
+            }
+            return new CacheResult<T>(false, null);
+        }
 
         // Mark as most recently read.
         this.mostRecentlyReadKeys.remove(key);
 //        this.mostRecentlyReadKeys.addLast(key);
         this.mostRecentlyReadKeys.addFirst(key);
 
-        System.out.println("Reading " + key + " mru="+mostRecentlyReadKeys);
+        System.out.println("Reading " + key + " mru=" + mostRecentlyReadKeys);
 
         return new CacheResult<T>(true, item.value);
+    }
+
+    private boolean isItemExpired(Item item) {
+        return item.expiryTimestamp != 0 && item.expiryTimestamp <= getCurrentTimeMillis();
     }
 
     /**
@@ -102,17 +119,32 @@ public class MemoryCache<T> implements Cache<T> {
 
         System.out.println("Adding " + key + ":" + value + " MRU=" + mostRecentlyReadKeys);
 
-        // Add item.
-        // TODO: Store expiry too, and clear when expired.
-        Item item = new Item(key, value);
+        assert expireAfterMS >= 0;
+        long expireTimestamp = expireAfterMS == 0 ? 0 : getCurrentTimeMillis() + expireAfterMS;
+
+        Runnable futureCancel = null;
+        if (expireAfterMS > 0) {
+            futureCancel = scheduler.Schedule(() -> _schedulerClear(key), expireAfterMS);
+        }
+
+        Item item = new Item(key, value, expireTimestamp, futureCancel);
         this.mostRecentlyReadKeys.addFirst(key);
         this.itemsByKey.put(key, item);
+
 
         // If we're over capacity, evict least recently read items.
         while (this.maxItems > 0 && this.itemsByKey.size() > this.maxItems) {
             String oldestKey = this.mostRecentlyReadKeys.getLast();
             this.clear(oldestKey);
         }
+    }
+
+    protected boolean _schedulerClear(String key) {
+        return clear(key);
+    }
+
+    protected long getCurrentTimeMillis() {
+        return System.currentTimeMillis();
     }
 
     /**
